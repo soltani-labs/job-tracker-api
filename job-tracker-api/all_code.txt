@@ -1,0 +1,612 @@
+- JobTrackerApiApplication
+package job_tracker_api;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+@SpringBootApplication
+public class JobTrackerApiApplication {
+
+	public static void main(String[] args) {
+		SpringApplication.run(JobTrackerApiApplication.class, args);
+	}
+
+}
+################################
+- ApplicationController
+package job_tracker_api.controller;
+
+import jakarta.validation.Valid;
+import job_tracker_api.domain.ApplicationStatus;
+import job_tracker_api.dto.ApplicationCreateRequest;
+import job_tracker_api.dto.ApplicationResponse;
+import job_tracker_api.dto.ApplicationUpdateRequest;
+import job_tracker_api.dto.StatusUpdateRequest;
+import job_tracker_api.service.ApplicationService;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+
+import java.net.URI;
+import java.util.List;
+
+@RestController
+@RequestMapping("/api/applications")
+public class ApplicationController {
+
+    private final ApplicationService applicationService;
+
+    public ApplicationController(ApplicationService applicationService) {
+        this.applicationService = applicationService;
+    }
+
+    @PostMapping
+    public ResponseEntity<ApplicationResponse> create(@Valid @RequestBody ApplicationCreateRequest request) {
+        ApplicationResponse response = applicationService.create(request);
+        return ResponseEntity
+                .created(URI.create("/api/applications/" + response.id()))
+                .body(response);
+    }
+
+    @GetMapping
+    public ResponseEntity<List<ApplicationResponse>> getAll(
+            @RequestParam(required = false) ApplicationStatus status,
+            @RequestParam(required = false) String company) {
+        return ResponseEntity.ok(applicationService.getAll(status, company));
+    }
+
+    @GetMapping("/{id}")
+    public ResponseEntity<ApplicationResponse> getById(@PathVariable Long id) {
+        return ResponseEntity.ok(applicationService.getById(id));
+    }
+
+    @PutMapping("/{id}")
+    public ResponseEntity<ApplicationResponse> update(
+            @PathVariable Long id,
+            @Valid @RequestBody ApplicationUpdateRequest request) {
+        return ResponseEntity.ok(applicationService.update(id, request));
+    }
+
+    @PatchMapping("/{id}/status")
+    public ResponseEntity<ApplicationResponse> changeStatus(
+            @PathVariable Long id,
+            @Valid @RequestBody StatusUpdateRequest request) {
+        return ResponseEntity.ok(applicationService.changeStatus(id, request));
+    }
+
+    @DeleteMapping("/{id}")
+    public ResponseEntity<Void> delete(@PathVariable Long id) {
+        applicationService.delete(id);
+        return ResponseEntity.noContent().build();
+    }
+}
+################################
+- Application
+package job_tracker_api.domain;
+
+
+import jakarta.persistence.*;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
+
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
+
+@Entity
+@Table(name = "applications")
+@Getter
+@Setter
+@NoArgsConstructor
+public class Application {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @Column(nullable = false)
+    private String company;
+
+    @Column(nullable = false)
+    private String role;
+
+    private String jobPostingUrl;
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 20)
+    private ApplicationStatus status;
+
+    @Column(nullable = false)
+    private LocalDate appliedDate;
+
+    @Column(nullable = false, updatable = false)
+    private LocalDateTime createdAt;
+
+    @Column(nullable = false)
+    private LocalDateTime lastUpdated;
+
+    @Column(length = 2000)
+    private String notes;
+
+    @OneToMany(mappedBy = "application", cascade = CascadeType.ALL, orphanRemoval = true)
+    private List<StatusHistory> statusHistory = new ArrayList<>();
+
+    public void addStatusHistory(StatusHistory history) {
+        statusHistory.add(history);
+        history.setApplication(this);
+    }
+
+    @PrePersist
+    void onCreate() {
+        LocalDateTime now = LocalDateTime.now();
+        this.createdAt = now;
+        this.lastUpdated = now;
+    }
+
+    @PreUpdate
+    void onUpdate() {
+        this.lastUpdated = LocalDateTime.now();
+    }
+}
+################################
+- ApplicationStatus
+package job_tracker_api.domain;
+
+
+import java.util.Map;
+import java.util.Set;
+
+import static java.util.Map.entry;
+
+public enum ApplicationStatus {
+
+    APPLIED,
+    PHONE_SCREEN,
+    TECHNICAL,
+    OFFER,
+    REJECTED;
+
+    private static final Map<ApplicationStatus, Set<ApplicationStatus>> ALLOWED_TRANSITIONS = Map.ofEntries(
+            entry(APPLIED, Set.of(PHONE_SCREEN, TECHNICAL, REJECTED)),
+            entry(PHONE_SCREEN, Set.of(TECHNICAL, REJECTED)),
+            entry(TECHNICAL, Set.of(OFFER, REJECTED)),
+            entry(OFFER, Set.of()),
+            entry(REJECTED, Set.of())
+    );
+
+    public boolean canTransitionTo(ApplicationStatus target) {
+        return ALLOWED_TRANSITIONS.get(this).contains(target);
+    }
+}
+################################
+- StatusHistory
+package job_tracker_api.domain;
+
+
+import jakarta.persistence.*;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
+
+import java.time.LocalDateTime;
+
+@Entity
+@Table(name = "status_history")
+@Getter
+@Setter
+@NoArgsConstructor
+public class StatusHistory {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "application_id", nullable = false)
+    private Application application;
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 20)
+    private ApplicationStatus status;
+
+    @Column(nullable = false, updatable = false)
+    private LocalDateTime changedAt;
+
+    public StatusHistory(ApplicationStatus status) {
+        this.status = status;
+    }
+
+    @PrePersist
+    void onCreate() {
+        this.changedAt = LocalDateTime.now();
+    }
+}
+################################
+- ApplicationCreateRequest
+package job_tracker_api.dto;
+
+
+
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.PastOrPresent;
+import jakarta.validation.constraints.Size;
+import job_tracker_api.domain.ApplicationStatus;
+
+import java.time.LocalDate;
+
+public record ApplicationCreateRequest(
+
+        @NotBlank(message = "Le nom de l'entreprise est obligatoire")
+        @Size(max = 100, message = "Le nom de l'entreprise ne doit pas dépasser 100 caractères")
+        String company,
+
+        @NotBlank(message = "Le nom du poste est obligatoire")
+        @Size(max = 100, message = "Le nom du poste ne doit pas dépasser 100 caractères")
+        String role,
+
+        @Size(max = 2048, message = "Le lien de l'annonce ne doit pas dépasser 2048 caractères")
+        String jobPostingUrl,
+
+        ApplicationStatus status,
+
+        @NotNull(message = "La date de candidature est obligatoire")
+        @PastOrPresent(message = "La date de candidature doit être passée ou présente")
+        LocalDate appliedDate,
+
+        @Size(max = 2000, message = "Les notes ne doivent pas dépasser 2000 caractères")
+        String notes
+) {}
+################################
+- ApplicationResponse
+package job_tracker_api.dto;
+
+
+import job_tracker_api.domain.Application;
+import job_tracker_api.domain.ApplicationStatus;
+
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.util.List;
+
+public record ApplicationResponse(
+        Long id,
+        String company,
+        String role,
+        String jobPostingUrl,
+        ApplicationStatus status,
+        LocalDate appliedDate,
+        LocalDateTime lastUpdated,
+        String notes,
+        List<StatusHistoryResponse> statusHistory
+) {
+    public static ApplicationResponse from(Application application) {
+        return new ApplicationResponse(
+                application.getId(),
+                application.getCompany(),
+                application.getRole(),
+                application.getJobPostingUrl(),
+                application.getStatus(),
+                application.getAppliedDate(),
+                application.getLastUpdated(),
+                application.getNotes(),
+                application.getStatusHistory().stream()
+                        .map(StatusHistoryResponse::from)
+                        .toList()
+        );
+    }
+}
+################################
+- ApplicationUpdateRequest
+package job_tracker_api.dto;
+
+
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.PastOrPresent;
+import jakarta.validation.constraints.Size;
+import job_tracker_api.domain.ApplicationStatus;
+
+import java.time.LocalDate;
+
+public record ApplicationUpdateRequest(
+
+        @NotBlank(message = "Le nom de l'entreprise est obligatoire")
+        @Size(max = 100, message = "Le nom de l'entreprise ne doit pas dépasser 100 caractères")
+        String company,
+
+        @NotBlank(message = "Le nom du poste est obligatoire")
+        @Size(max = 100, message = "Le nom du poste ne doit pas dépasser 100 caractères")
+        String role,
+
+        @Size(max = 2048, message = "Le lien de l'annonce ne doit pas dépasser 2048 caractères")
+        String jobPostingUrl,
+
+        @NotNull(message = "Le statut est obligatoire")
+        ApplicationStatus status,
+
+        @NotNull(message = "La date de candidature est obligatoire")
+        @PastOrPresent(message = "La date de candidature doit être passée ou présente")
+        LocalDate appliedDate,
+
+        @Size(max = 2000, message = "Les notes ne doivent pas dépasser 2000 caractères")
+        String notes
+) {}
+
+################################
+- StatusHistoryResponse
+package job_tracker_api.dto;
+
+
+
+import job_tracker_api.domain.ApplicationStatus;
+import job_tracker_api.domain.StatusHistory;
+
+import java.time.LocalDateTime;
+
+public record StatusHistoryResponse(
+        ApplicationStatus status,
+        LocalDateTime changedAt
+) {
+    public static StatusHistoryResponse from(StatusHistory history) {
+        return new StatusHistoryResponse(history.getStatus(), history.getChangedAt());
+    }
+}
+################################
+- StatusUpdateRequest
+package job_tracker_api.dto;
+
+
+import jakarta.validation.constraints.NotNull;
+import job_tracker_api.domain.ApplicationStatus;
+
+public record StatusUpdateRequest(
+
+        @NotNull(message = "Le statut est obligatoire")
+        ApplicationStatus status
+) {}
+################################
+- ApplicationNotFoundException
+package job_tracker_api.exception;
+
+public class ApplicationNotFoundException extends RuntimeException {
+
+    public ApplicationNotFoundException(Long id) {
+        super("Candidature introuvable avec l'identifiant : " + id);
+    }
+}
+################################
+- ErrorResponse
+package job_tracker_api.exception;
+
+
+import com.fasterxml.jackson.annotation.JsonInclude;
+
+import java.util.Map;
+
+@JsonInclude(JsonInclude.Include.NON_NULL)
+public record ErrorResponse(String message, Map<String, String> errors) {
+
+    public static ErrorResponse of(String message) {
+        return new ErrorResponse(message, null);
+    }
+
+    public static ErrorResponse withErrors(Map<String, String> errors) {
+        return new ErrorResponse("La validation a échoué", errors);
+    }
+}
+################################
+- GlobalExceptionHandler
+package job_tracker_api.exception;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+
+import java.util.LinkedHashMap;
+import java.util.Map;
+
+@RestControllerAdvice
+public class GlobalExceptionHandler {
+
+    private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
+
+    @ExceptionHandler(ApplicationNotFoundException.class)
+    public ResponseEntity<ErrorResponse> handleNotFound(ApplicationNotFoundException ex) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(ErrorResponse.of(ex.getMessage()));
+    }
+
+    @ExceptionHandler(InvalidStatusTransitionException.class)
+    public ResponseEntity<ErrorResponse> handleInvalidTransition(InvalidStatusTransitionException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ErrorResponse.of(ex.getMessage()));
+    }
+
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    public ResponseEntity<ErrorResponse> handleValidation(MethodArgumentNotValidException ex) {
+        Map<String, String> errors = new LinkedHashMap<>();
+        ex.getBindingResult().getFieldErrors().forEach(fieldError ->
+                errors.put(fieldError.getField(), fieldError.getDefaultMessage()));
+        return ResponseEntity.badRequest()
+                .body(ErrorResponse.withErrors(errors));
+    }
+
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<ErrorResponse> handleUnreadableBody(HttpMessageNotReadableException ex) {
+        return ResponseEntity.badRequest()
+                .body(ErrorResponse.of("Requête invalide : le corps de la requête est mal formé ou contient une valeur non reconnue"));
+    }
+
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<ErrorResponse> handleTypeMismatch(MethodArgumentTypeMismatchException ex) {
+        return ResponseEntity.badRequest()
+                .body(ErrorResponse.of("Paramètre invalide : " + ex.getName()));
+    }
+
+    @ExceptionHandler(Exception.class)
+    public ResponseEntity<ErrorResponse> handleUnexpected(Exception ex) {
+        log.error("Unexpected error", ex);
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(ErrorResponse.of("Une erreur interne est survenue"));
+    }
+}
+################################
+- InvalidStatusTransitionException
+package job_tracker_api.exception;
+
+
+import job_tracker_api.domain.ApplicationStatus;
+
+public class InvalidStatusTransitionException extends RuntimeException {
+
+    public InvalidStatusTransitionException(ApplicationStatus from, ApplicationStatus to) {
+        super("Transition de statut invalide : " + from + " vers " + to);
+    }
+}
+################################
+- ApplicationRepository
+package job_tracker_api.repository;
+
+import job_tracker_api.domain.Application;
+import job_tracker_api.domain.ApplicationStatus;
+import org.springframework.data.jpa.repository.JpaRepository;
+
+import java.util.List;
+
+public interface ApplicationRepository extends JpaRepository<Application, Long> {
+
+    List<Application> findByStatus(ApplicationStatus status);
+
+    List<Application> findByCompanyContainingIgnoreCase(String company);
+
+    List<Application> findByStatusAndCompanyContainingIgnoreCase(ApplicationStatus status, String company);
+}
+################################
+- StatusHistoryRepository
+package job_tracker_api.repository;
+
+
+import job_tracker_api.domain.StatusHistory;
+import org.springframework.data.jpa.repository.JpaRepository;
+
+import java.util.List;
+
+public interface StatusHistoryRepository extends JpaRepository<StatusHistory, Long> {
+
+    List<StatusHistory> findByApplicationIdOrderByChangedAtAsc(Long applicationId);
+}
+################################
+- ApplicationService
+package job_tracker_api.service;
+
+
+import job_tracker_api.domain.Application;
+import job_tracker_api.domain.ApplicationStatus;
+import job_tracker_api.domain.StatusHistory;
+import job_tracker_api.dto.ApplicationCreateRequest;
+import job_tracker_api.dto.ApplicationResponse;
+import job_tracker_api.dto.ApplicationUpdateRequest;
+import job_tracker_api.dto.StatusUpdateRequest;
+import job_tracker_api.exception.ApplicationNotFoundException;
+import job_tracker_api.exception.InvalidStatusTransitionException;
+import job_tracker_api.repository.ApplicationRepository;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.util.List;
+
+@Service
+public class ApplicationService {
+
+    private final ApplicationRepository applicationRepository;
+
+    public ApplicationService(ApplicationRepository applicationRepository) {
+        this.applicationRepository = applicationRepository;
+    }
+
+    @Transactional
+    public ApplicationResponse create(ApplicationCreateRequest request) {
+        Application application = new Application();
+        application.setCompany(request.company());
+        application.setRole(request.role());
+        application.setJobPostingUrl(request.jobPostingUrl());
+        application.setAppliedDate(request.appliedDate());
+        application.setNotes(request.notes());
+        application.setStatus(request.status() != null ? request.status() : ApplicationStatus.APPLIED);
+
+
+        application.addStatusHistory(new StatusHistory(application.getStatus()));
+
+        return ApplicationResponse.from(applicationRepository.save(application));
+    }
+
+    @Transactional(readOnly = true)
+    public List<ApplicationResponse> getAll(ApplicationStatus status, String company) {
+        List<Application> applications;
+        if (status != null && company != null) {
+            applications = applicationRepository.findByStatusAndCompanyContainingIgnoreCase(status, company);
+        } else if (status != null) {
+            applications = applicationRepository.findByStatus(status);
+        } else if (company != null) {
+            applications = applicationRepository.findByCompanyContainingIgnoreCase(company);
+        } else {
+            applications = applicationRepository.findAll();
+        }
+        return applications.stream().map(ApplicationResponse::from).toList();
+    }
+
+    @Transactional(readOnly = true)
+    public ApplicationResponse getById(Long id) {
+        return ApplicationResponse.from(findById(id));
+    }
+
+    @Transactional
+    public ApplicationResponse update(Long id, ApplicationUpdateRequest request) {
+        Application application = findById(id);
+        application.setCompany(request.company());
+        application.setRole(request.role());
+        application.setJobPostingUrl(request.jobPostingUrl());
+        application.setAppliedDate(request.appliedDate());
+        application.setNotes(request.notes());
+
+        if (request.status() != application.getStatus()) {
+            changeStatusInternal(application, request.status());
+        }
+        return ApplicationResponse.from(application);
+    }
+
+    @Transactional
+    public ApplicationResponse changeStatus(Long id, StatusUpdateRequest request) {
+        Application application = findById(id);
+        changeStatusInternal(application, request.status());
+        return ApplicationResponse.from(application);
+    }
+
+    @Transactional
+    public void delete(Long id) {
+        applicationRepository.delete(findById(id));
+    }
+
+    private Application findById(Long id) {
+        return applicationRepository.findById(id)
+                .orElseThrow(() -> new ApplicationNotFoundException(id));
+    }
+
+    private void changeStatusInternal(Application application, ApplicationStatus target) {
+        if (!application.getStatus().canTransitionTo(target)) {
+            throw new InvalidStatusTransitionException(application.getStatus(), target);
+        }
+        application.setStatus(target);
+        application.addStatusHistory(new StatusHistory(target));
+    }
+}
+################################

@@ -1,5 +1,6 @@
-package job_tracker_api.domain;
+package job_tracker_api;
 
+import job_tracker_api.domain.ApplicationStatus;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.api.Test;
