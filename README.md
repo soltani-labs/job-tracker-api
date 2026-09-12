@@ -81,6 +81,7 @@ JSON
   "appliedDate": "2026-09-01",
   "notes": "envoyée via LinkedIn"
 }
+
 Améliorations futures (peut-être) :
 
 Vraie base de données (PostgreSQL)
